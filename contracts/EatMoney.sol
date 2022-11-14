@@ -99,6 +99,14 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         uint256 eatCoinsMinted
     );
 
+    event LevelUp(
+        uint256 plateId,
+        uint256 efficency,
+        uint256 fortune,
+        uint256 durability,
+        uint256 level
+    );
+
     constructor(
         uint64 subscriptionId,
         address vrfCoordinator,
@@ -308,6 +316,45 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             eatRequest.restaurantId,
             eatRequest.amount,
             eatCoins
+        );
+    }
+
+    function levelUp(
+        uint256 efficency,
+        uint256 fortune,
+        uint256 durability,
+        uint256 plateId
+    ) public {
+        require(
+            balanceOf(msg.sender, plateId) == 1,
+            "You don't have this plate"
+        );
+        EatPlate memory plate = idToEatPlate[plateId];
+        require(plate.level < 4, "Plate is already max level");
+        require(
+            efficency + fortune + durability == 10,
+            "Invalid points allocation"
+        );
+        uint256 amount = 0;
+        if (plate.level == 1) {
+            amount = 100 * 10**EAT_DECIMALS;
+        } else if (plate.level == 2) {
+            amount = 180 * 10**EAT_DECIMALS;
+        } else if (plate.level == 3) {
+            amount = 350 * 10**EAT_DECIMALS;
+        }
+        safeTransferFrom(msg.sender, address(this), 0, amount, "");
+        idToEatPlate[plateId].efficiency += efficency;
+        idToEatPlate[plateId].fortune += fortune;
+        idToEatPlate[plateId].durablity += durability;
+        idToEatPlate[plateId].level += 1;
+
+        emit LevelUp(
+            plateId,
+            efficency,
+            fortune,
+            durability,
+            idToEatPlate[plateId].level
         );
     }
 
