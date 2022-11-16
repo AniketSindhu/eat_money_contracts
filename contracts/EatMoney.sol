@@ -37,7 +37,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
     using Counters for Counters.Counter;
     Counters.Counter private _tokenIds;
     Counters.Counter private _restaurants;
-
+    Counters.Counter private _listings;
     enum Category {
         BRONZE,
         SILVER,
@@ -85,6 +85,16 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
 
     mapping(uint256 => EatPlate) public idToEatPlate;
     mapping(uint256 => Restaurant) public idToRestaurant;
+
+    struct MarketItem {
+        uint256 id;
+        uint256 price;
+        address payable owner;
+        bool active;
+        uint256 tokenId;
+    }
+
+    mapping(uint256 => MarketItem) public idToMarketplaceItem;
 
     struct Restaurant {
         uint256 id;
@@ -256,6 +266,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         }
 
         require(amount <= amountCap, "Amount exceeds plate max cap");
+        require(plate.shiny > 0, "Plate too dirty, clean to use it");
         require(
             verify(
                 idToRestaurant[restaurantId].owner,
@@ -300,13 +311,20 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             "Aleady claimed eat coins for this request"
         );
         EatPlate memory plate = idToEatPlate[eatRequest.plateId];
+        uint256 shinyFactor = 100;
+        if (plate.shiny <= 60) {
+            shinyFactor = 111; // earning drop to 90% if shiny is less than 60
+        } else if (plate.shiny <= 20) {
+            shinyFactor = 1000; // earning drop to 10% if shiny is less than 20
+        }
         uint256 randomWord = randomWords[0];
         uint256 randFactor = (randomWord % (FACTOR_3 - FACTOR_2 + 1)) +
             FACTOR_2;
         uint256 eatCoins = ((plate.efficiency**FACTOR_1) *
             eatRequest.amount *
-            10**2) / randFactor;
+            10**4) / (randFactor * shinyFactor);
         idToEatPlate[eatRequest.plateId].lastEat = block.timestamp;
+        idToEatPlate[eatRequest.plateId].shiny -= 10;
         reqIdToEatRequest[requestId].active = true;
 
         mintEatCoins(eatRequest.owner, eatCoins);
@@ -422,4 +440,51 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
 
         // implicitly return (r, s, v)
     }
+
+    //<------------------------------Marketplace functions-------------------------------------------->
+
+    //function to list nft
+    function listPlate(uint256 plateId, uint256 price) public {
+        require(
+            idToEatPlate[plateId].shiny == 100,
+            "Clean your plate before selling"
+        );
+        _listings.increment();
+        idToMarketplaceItem[_listings.current()] = MarketItem(
+            _listings.current(),
+            price,
+            payable(msg.sender),
+            true,
+            plateId
+        );
+        _safeTransferFrom(msg.sender, address(this), plateId, 1, "");
+        //emit Listed(plateId, price);
+    }
+
+    //function to buy nft
+    function buyPlate(uint256 listingId) public payable {
+        MarketItem memory listing = idToMarketplaceItem[listingId];
+        require(listing.active, "Listing is not active");
+        require(listing.price == msg.value, "Price is not correct");
+        _safeTransferFrom(address(this), msg.sender, listing.tokenId, 1, "");
+        listing.owner.transfer(msg.value);
+        idToMarketplaceItem[listingId].active = false;
+        //emit Bought(listingId);
+    }
+
+    //function to view all active listings
+    function getMarketplaceItems() public view returns (MarketItem[] memory) {
+        uint256 totalListings = _listings.current();
+        MarketItem[] memory items = new MarketItem[](totalListings);
+        uint256 index = 0;
+        for (uint256 i = 1; i <= totalListings; i++) {
+            if (idToMarketplaceItem[i].active) {
+                items[index] = idToMarketplaceItem[i];
+                index++;
+            }
+        }
+        return items;
+    }
+
+    // <--------------------------------Marketplace functions end------------------------------------>
 }
