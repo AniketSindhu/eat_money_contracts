@@ -42,18 +42,20 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         BRONZE,
         SILVER,
         GOLD,
-        SAPHIRE
+        EMERALD
     }
 
     enum ChainlinkRequestType {
         MINT,
-        EAT
+        EAT,
+        SPIN
     }
 
     mapping(uint256 => ChainlinkRequestType) public chailinkRequestsTypes;
     mapping(uint256 => uint8) public reqIdTocategory;
 
     mapping(uint256 => EatRequest) public reqIdToEatRequest;
+    mapping(uint256 => SpinRequest) public reqIdToSpinRequest;
 
     struct EatPlate {
         uint256 id;
@@ -64,12 +66,21 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         uint8 level;
         Category category;
         uint256 lastEat;
+        uint256 eats;
+        Spin[] spins;
     }
 
     struct MintRequest {
         uint8 category;
         uint256[] randomWords;
         bool isMinted;
+    }
+
+    struct SpinRequest {
+        uint256 plateId;
+        address owner;
+        uint256 eatCoins;
+        bool active;
     }
 
     struct EatRequest {
@@ -85,6 +96,13 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
 
     mapping(uint256 => EatPlate) public idToEatPlate;
     mapping(uint256 => Restaurant) public idToRestaurant;
+
+    struct Spin {
+        uint256 spinId;
+        uint32 result; //   1/2/3/4
+        uint256 eatCoins;
+        bool isSpinned;
+    }
 
     struct MarketItem {
         uint256 id;
@@ -102,6 +120,8 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         address payable owner;
     }
 
+    mapping(address => uint256) public addressToRestaurantId;
+
     event EatFinished(
         uint256 plateId,
         uint256 restaurantId,
@@ -116,6 +136,8 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         uint256 durability,
         uint256 level
     );
+
+    event SpinFinished(uint256 plateId, uint256 spinId, uint256 eatCoinsWon);
 
     constructor(
         uint64 subscriptionId,
@@ -143,6 +165,8 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             );
         } else if (requestType == ChainlinkRequestType.EAT) {
             _finishEat(requestId, randomWords);
+        } else if (requestType == ChainlinkRequestType.SPIN) {
+            _finishSpin(requestId, randomWords);
         }
     }
 
@@ -215,7 +239,9 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
                 100,
                 level,
                 Category(category),
-                0
+                0,
+                0,
+                new Spin[](0)
             );
 
             plates.push(plate);
@@ -225,17 +251,57 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         mintRequests[reqIndex].isMinted = true;
     }
 
+    //change factors
+    function changeFactor(
+        uint256 factor1,
+        uint256 factor2,
+        uint256 factor3
+    ) public onlyOwner {
+        require(factor2 < factor3, "Factor 2 should be less than factor 3");
+        FACTOR_1 = factor1;
+        FACTOR_2 = factor2;
+        FACTOR_3 = factor3;
+    }
+
     function registerRestaurant(
         string calldata restaurantInfo,
         address restaurantAddress
-    ) public onlyOwner {
+    ) public {
         require(restaurantAddress != address(0), "Invalid address");
+        require(
+            addressToRestaurantId[restaurantAddress] == 0,
+            "Restaurant already registered"
+        );
         _restaurants.increment();
         uint256 id = _restaurants.current();
+        safeTransferFrom(
+            msg.sender,
+            address(this),
+            0,
+            2000 * 10**EAT_DECIMALS,
+            ""
+        );
+        addressToRestaurantId[restaurantAddress] = id;
         idToRestaurant[id] = Restaurant(
             id,
             restaurantInfo,
             payable(restaurantAddress)
+        );
+    }
+
+    // delete restaurant, return stake
+    function deleteRestaurant(address restaurantAddress) public {
+        require(restaurantAddress != address(0), "Invalid address");
+        uint256 id = addressToRestaurantId[restaurantAddress];
+        require(id != 0, "Restaurant not registered");
+        delete idToRestaurant[id];
+        delete addressToRestaurantId[restaurantAddress];
+        safeTransferFrom(
+            address(this),
+            restaurantAddress,
+            0,
+            2000 * 10**EAT_DECIMALS,
+            ""
         );
     }
 
@@ -261,7 +327,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             amountCap = 15000000;
         } else if (plate.category == Category.GOLD) {
             amountCap = 50000000;
-        } else if (plate.category == Category.SAPHIRE) {
+        } else if (plate.category == Category.EMERALD) {
             amountCap = 100000000;
         }
 
@@ -326,7 +392,10 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         idToEatPlate[eatRequest.plateId].lastEat = block.timestamp;
         idToEatPlate[eatRequest.plateId].shiny -= 10;
         reqIdToEatRequest[requestId].active = true;
-
+        idToEatPlate[eatRequest.plateId].spins.push(
+            Spin(plate.eats, 0, eatCoins, false)
+        );
+        idToEatPlate[eatRequest.plateId].eats += 1;
         mintEatCoins(eatRequest.owner, eatCoins);
 
         emit EatFinished(
@@ -334,6 +403,83 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             eatRequest.restaurantId,
             eatRequest.amount,
             eatCoins
+        );
+    }
+
+    function spinWheel(uint256 plateId) public {
+        require(
+            balanceOf(msg.sender, plateId) == 1,
+            "You don't have this plate"
+        );
+        EatPlate memory plate = idToEatPlate[plateId];
+        require(plate.spins.length > 0, "No spins available");
+        require(
+            plate.spins[plate.spins.length - 1].isSpinned == false,
+            "Last eat spin already done"
+        );
+        require(
+            plate.lastEat + 5 minutes < block.timestamp,
+            "You can spin only after 5 minutes of last eat"
+        );
+        burn(msg.sender, plateId, 30**EAT_DECIMALS);
+        uint256 requestId = COORDINATOR.requestRandomWords(
+            s_keyHash,
+            s_subscriptionId,
+            requestConfirmations,
+            callbackGasLimit,
+            1
+        );
+        chailinkRequestsTypes[requestId] = ChainlinkRequestType.SPIN;
+        reqIdToSpinRequest[requestId] = SpinRequest(
+            plateId,
+            msg.sender,
+            plate.spins[plate.spins.length - 1].eatCoins,
+            false
+        );
+    }
+
+    function _finishSpin(uint256 requestId, uint256[] memory randomWords)
+        internal
+    {
+        SpinRequest memory spinRequest = reqIdToSpinRequest[requestId];
+        require(spinRequest.active == false, "Aleady spinned for this request");
+        EatPlate memory plate = idToEatPlate[spinRequest.plateId];
+        uint256 randomWord = randomWords[0] % 1000;
+        //more odds based on fortune
+        uint32 result = 0;
+        uint256 eatCoinsWon = 0;
+        if (randomWord < plate.fortune * 10) {
+            if (randomWord < plate.fortune * 2) {
+                result = 4;
+                eatCoinsWon = spinRequest.eatCoins / 3;
+            } else if (randomWord < plate.fortune * 5) {
+                result = 3;
+                eatCoinsWon = spinRequest.eatCoins / 5;
+            } else {
+                result = 2;
+                eatCoinsWon = spinRequest.eatCoins / 10;
+            }
+        } else {
+            result = 1;
+            eatCoinsWon = 0;
+        }
+        idToEatPlate[spinRequest.plateId]
+            .spins[plate.spins.length - 1]
+            .result = result;
+        idToEatPlate[spinRequest.plateId]
+            .spins[plate.spins.length - 1]
+            .isSpinned = true;
+
+        reqIdToSpinRequest[requestId].active = true;
+
+        if (eatCoinsWon > 0) {
+            mintEatCoins(spinRequest.owner, eatCoinsWon);
+        }
+
+        emit SpinFinished(
+            spinRequest.plateId,
+            plate.spins.length - 1,
+            eatCoinsWon
         );
     }
 
@@ -361,7 +507,8 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         } else if (plate.level == 3) {
             amount = 350 * 10**EAT_DECIMALS;
         }
-        safeTransferFrom(msg.sender, address(this), 0, amount, "");
+        burn(msg.sender, 0, amount);
+        //safeTransferFrom(msg.sender, address(this), 0, amount, "");
         idToEatPlate[plateId].efficiency += efficency;
         idToEatPlate[plateId].fortune += fortune;
         idToEatPlate[plateId].durablity += durability;
@@ -374,6 +521,21 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             durability,
             idToEatPlate[plateId].level
         );
+    }
+
+    function clean(uint256 plateId) public {
+        require(
+            balanceOf(msg.sender, plateId) == 1,
+            "You don't have this plate"
+        );
+        EatPlate memory plate = idToEatPlate[plateId];
+        require(plate.shiny < 100, "Plate is already shiny");
+        uint256 costPerShiny = (10**EAT_DECIMALS * plate.level * 12) /
+            (plate.durablity**2);
+        uint256 amount = (100 - plate.shiny) * costPerShiny;
+        burn(msg.sender, 0, amount);
+        //safeTransferFrom(msg.sender, address(this), 0, amount, "");
+        idToEatPlate[plateId].shiny = 100;
     }
 
     function getMessageHash(string memory _message, uint256 _nonce)
@@ -463,6 +625,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
 
     //function to buy nft
     function buyPlate(uint256 listingId) public payable {
+        //todo restricts users from buying multiple plates
         MarketItem memory listing = idToMarketplaceItem[listingId];
         require(listing.active, "Listing is not active");
         require(listing.price == msg.value, "Price is not correct");
@@ -487,4 +650,35 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
     }
 
     // <--------------------------------Marketplace functions end------------------------------------>
+
+    // <--------------------------------Views------------------------------------>
+    //view function to get all plates of an address
+    function getPlatesOfOwner(address _owner)
+        public
+        view
+        returns (EatPlate memory)
+    {
+        uint256 plateId = 0;
+        for (uint256 i = 1; i <= _tokenIds.current(); i++) {
+            if (balanceOf(_owner, i) > 0) {
+                plateId = i;
+                break;
+            }
+        }
+        if (plateId == 0) {
+            return EatPlate(0, 0, 0, 0, 0, 0, Category(0), 0, 0, new Spin[](0));
+        } else {
+            return idToEatPlate[plateId];
+        }
+    }
+
+    //view function to get restaurant details from address
+    function getRestaurantDetails(address _owner)
+        public
+        view
+        returns (Restaurant memory)
+    {
+        return idToRestaurant[addressToRestaurantId[_owner]];
+    }
+    // <--------------------------------Views------------------------------------>
 }
