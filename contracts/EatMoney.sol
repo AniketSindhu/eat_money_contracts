@@ -632,6 +632,10 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
     function buyPlate(uint256 listingId) public payable {
         //todo restricts users from buying multiple plates
         MarketItem memory listing = idToMarketplaceItem[listingId];
+        require(
+            getPlatesOfOwner(msg.sender).id != 0,
+            "You already have a plate, EAT ON THAT"
+        );
         require(listing.active, "Listing is not active");
         require(listing.price == msg.value, "Price is not correct");
         _safeTransferFrom(address(this), msg.sender, listing.tokenId, 1, "");
