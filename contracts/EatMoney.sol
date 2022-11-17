@@ -143,7 +143,12 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         uint64 subscriptionId,
         address vrfCoordinator,
         bytes32 keyHash
-    ) VRFConsumerBaseV2(vrfCoordinator) ERC1155("") {
+    )
+        VRFConsumerBaseV2(vrfCoordinator)
+        ERC1155(
+            "ipfs://bafybeickwso5eac5krffgzdk2ktfg5spnryiygk3mbenryxdsapg3a54va/"
+        )
+    {
         COORDINATOR = VRFCoordinatorV2Interface(vrfCoordinator);
         s_keyHash = keyHash;
         s_subscriptionId = subscriptionId;
@@ -680,5 +685,61 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
     {
         return idToRestaurant[addressToRestaurantId[_owner]];
     }
+
     // <--------------------------------Views------------------------------------>
+
+    function uri(uint256 id)
+        public
+        view
+        virtual
+        override
+        returns (string memory)
+    {
+        EatPlate memory plate = idToEatPlate[id];
+        if (plate.category == Category.BRONZE) {
+            if (plate.level == 1) {
+                return string(abi.encodePacked(super.uri(id), "bronze_1.json"));
+            } else if (plate.level == 2) {
+                return string(abi.encodePacked(super.uri(id), "bronze_2.json"));
+            } else if (plate.level == 3) {
+                return string(abi.encodePacked(super.uri(id), "bronze_3.json"));
+            } else {
+                return string(abi.encodePacked(super.uri(id), "bronze_4.json"));
+            }
+        } else if (plate.category == Category.SILVER) {
+            if (plate.level == 1) {
+                return string(abi.encodePacked(super.uri(id), "silver_1.json"));
+            } else if (plate.level == 2) {
+                return string(abi.encodePacked(super.uri(id), "silver_2.json"));
+            } else if (plate.level == 3) {
+                return string(abi.encodePacked(super.uri(id), "silver_3.json"));
+            } else {
+                return string(abi.encodePacked(super.uri(id), "silver_4.json"));
+            }
+        } else if (plate.category == Category.GOLD) {
+            if (plate.level == 1) {
+                return string(abi.encodePacked(super.uri(id), "gold_1.json"));
+            } else if (plate.level == 2) {
+                return string(abi.encodePacked(super.uri(id), "gold_2.json"));
+            } else if (plate.level == 3) {
+                return string(abi.encodePacked(super.uri(id), "gold_3.json"));
+            } else {
+                return string(abi.encodePacked(super.uri(id), "gold_4.json"));
+            }
+        } else {
+            if (plate.level == 1) {
+                return
+                    string(abi.encodePacked(super.uri(id), "emerald_1.json"));
+            } else if (plate.level == 2) {
+                return
+                    string(abi.encodePacked(super.uri(id), "emerald_2.json"));
+            } else if (plate.level == 3) {
+                return
+                    string(abi.encodePacked(super.uri(id), "emerald_3.json"));
+            } else {
+                return
+                    string(abi.encodePacked(super.uri(id), "emerald_4.json"));
+            }
+        }
+    }
 }
