@@ -4,9 +4,8 @@ pragma solidity ^0.8.7;
 import "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC1155/extensions/ERC1155Burnable.sol";
+import "@openzeppelin/contracts/token/ERC1155/utils/ERC1155Holder.sol";
 
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
 
 import "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
@@ -16,8 +15,15 @@ import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 
 //0x4b09e658ed251bcafeebbc69400383d49f344ace09b9576fe248bb02c003fe9f --> VRF Key Hash
 //0x7a1BaC17Ccc5b313516C5E16fb24f7659aA5ebed --> VRFCoordinator
+//2516 sub id
 
-contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
+contract EatMoney is
+    ERC1155,
+    ERC1155Burnable,
+    Ownable,
+    VRFConsumerBaseV2,
+    ERC1155Holder
+{
     // <---------------------Declarations------------------------------------>
 
     uint256 constant EAT_DECIMALS = 8;
@@ -67,7 +73,19 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         Category category;
         uint256 lastEat;
         uint256 eats;
-        Spin[] spins;
+        mapping(uint256 => Spin) idToSpin;
+    }
+
+    struct EatPlateReturn {
+        uint256 id;
+        uint256 efficiency;
+        uint256 fortune;
+        uint256 durablity;
+        uint256 shiny;
+        uint8 level;
+        Category category;
+        uint256 lastEat;
+        uint256 eats;
     }
 
     struct MintRequest {
@@ -92,7 +110,6 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
     }
 
     MintRequest[] public mintRequests;
-    EatPlate[] public plates;
 
     mapping(uint256 => EatPlate) public idToEatPlate;
     mapping(uint256 => Restaurant) public idToRestaurant;
@@ -158,6 +175,16 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
     }
 
     // <---------------------Functions------------------------------------>
+
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        virtual
+        override(ERC1155, ERC1155Receiver)
+        returns (bool)
+    {
+        return super.supportsInterface(interfaceId);
+    }
 
     function fulfillRandomWords(uint256 requestId, uint256[] memory randomWords)
         internal
@@ -236,21 +263,17 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
 
             ids[i] = id;
             amounts[i] = 1;
-            EatPlate memory plate = EatPlate(
-                id,
-                efficiency,
-                fortune,
-                durability,
-                100,
-                level,
-                Category(category),
-                0,
-                0,
-                new Spin[](0)
-            );
+            EatPlate storage plate = idToEatPlate[id];
 
-            plates.push(plate);
-            idToEatPlate[id] = plate;
+            plate.id = id;
+            plate.efficiency = efficiency;
+            plate.fortune = fortune;
+            plate.durablity = durability;
+            plate.shiny = 100;
+            plate.level = level;
+            plate.category = Category(category);
+            plate.lastEat = block.timestamp;
+            plate.eats = 0;
         }
         mintBatch(owner(), ids, amounts, "");
         mintRequests[reqIndex].isMinted = true;
@@ -323,7 +346,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             "You don't have this plate"
         );
 
-        EatPlate memory plate = idToEatPlate[plateId];
+        EatPlate storage plate = idToEatPlate[plateId];
         uint256 amountCap = 0;
 
         if (plate.category == Category.BRONZE) {
@@ -381,7 +404,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             eatRequest.active == false,
             "Aleady claimed eat coins for this request"
         );
-        EatPlate memory plate = idToEatPlate[eatRequest.plateId];
+        EatPlate storage plate = idToEatPlate[eatRequest.plateId];
         uint256 shinyFactor = 100;
         if (plate.shiny <= 60) {
             shinyFactor = 111; // earning drop to 90% if shiny is less than 60
@@ -397,10 +420,14 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         idToEatPlate[eatRequest.plateId].lastEat = block.timestamp;
         idToEatPlate[eatRequest.plateId].shiny -= 10;
         reqIdToEatRequest[requestId].active = true;
-        idToEatPlate[eatRequest.plateId].spins.push(
-            Spin(plate.eats, 0, eatCoins, false)
+        idToEatPlate[eatRequest.plateId].idToSpin[plate.eats + 1] = Spin(
+            plate.eats + 1,
+            0,
+            eatCoins,
+            false
         );
         idToEatPlate[eatRequest.plateId].eats += 1;
+
         mintEatCoins(eatRequest.owner, eatCoins);
 
         emit EatFinished(
@@ -416,10 +443,10 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             balanceOf(msg.sender, plateId) == 1,
             "You don't have this plate"
         );
-        EatPlate memory plate = idToEatPlate[plateId];
-        require(plate.spins.length > 0, "No spins available");
+        EatPlate storage plate = idToEatPlate[plateId];
+        require(plate.eats > 0, "No spins available");
         require(
-            plate.spins[plate.spins.length - 1].isSpinned == false,
+            plate.idToSpin[plate.eats].isSpinned == false,
             "Last eat spin already done"
         );
         require(
@@ -438,7 +465,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         reqIdToSpinRequest[requestId] = SpinRequest(
             plateId,
             msg.sender,
-            plate.spins[plate.spins.length - 1].eatCoins,
+            plate.idToSpin[plate.eats].eatCoins,
             false
         );
     }
@@ -448,7 +475,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
     {
         SpinRequest memory spinRequest = reqIdToSpinRequest[requestId];
         require(spinRequest.active == false, "Aleady spinned for this request");
-        EatPlate memory plate = idToEatPlate[spinRequest.plateId];
+        EatPlate storage plate = idToEatPlate[spinRequest.plateId];
         uint256 randomWord = randomWords[0] % 1000;
         //more odds based on fortune
         uint32 result = 0;
@@ -468,12 +495,8 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             result = 1;
             eatCoinsWon = 0;
         }
-        idToEatPlate[spinRequest.plateId]
-            .spins[plate.spins.length - 1]
-            .result = result;
-        idToEatPlate[spinRequest.plateId]
-            .spins[plate.spins.length - 1]
-            .isSpinned = true;
+        idToEatPlate[spinRequest.plateId].idToSpin[plate.eats].result = result;
+        idToEatPlate[spinRequest.plateId].idToSpin[plate.eats].isSpinned = true;
 
         reqIdToSpinRequest[requestId].active = true;
 
@@ -481,11 +504,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             mintEatCoins(spinRequest.owner, eatCoinsWon);
         }
 
-        emit SpinFinished(
-            spinRequest.plateId,
-            plate.spins.length - 1,
-            eatCoinsWon
-        );
+        emit SpinFinished(spinRequest.plateId, plate.eats, eatCoinsWon);
     }
 
     function levelUp(
@@ -498,7 +517,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             balanceOf(msg.sender, plateId) == 1,
             "You don't have this plate"
         );
-        EatPlate memory plate = idToEatPlate[plateId];
+        EatPlate storage plate = idToEatPlate[plateId];
         require(plate.level < 4, "Plate is already max level");
         require(
             efficency + fortune + durability == 10,
@@ -533,7 +552,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
             balanceOf(msg.sender, plateId) == 1,
             "You don't have this plate"
         );
-        EatPlate memory plate = idToEatPlate[plateId];
+        EatPlate storage plate = idToEatPlate[plateId];
         require(plate.shiny < 100, "Plate is already shiny");
         uint256 costPerShiny = (10**EAT_DECIMALS * plate.level * 12) /
             (plate.durablity**2);
@@ -544,7 +563,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
     }
 
     function getMessageHash(string memory _message, uint256 _nonce)
-        public
+        internal
         pure
         returns (bytes32)
     {
@@ -552,7 +571,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
     }
 
     function getEthSignedMessageHash(bytes32 _messageHash)
-        public
+        internal
         pure
         returns (bytes32)
     {
@@ -570,7 +589,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         string memory _message,
         uint256 _nonce,
         bytes memory signature
-    ) public pure returns (bool) {
+    ) internal pure returns (bool) {
         bytes32 messageHash = getMessageHash(_message, _nonce);
         bytes32 ethSignedMessageHash = getEthSignedMessageHash(messageHash);
 
@@ -580,14 +599,14 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
     function recoverSigner(
         bytes32 _ethSignedMessageHash,
         bytes memory _signature
-    ) public pure returns (address) {
+    ) internal pure returns (address) {
         (bytes32 r, bytes32 s, uint8 v) = splitSignature(_signature);
 
         return ecrecover(_ethSignedMessageHash, v, r, s);
     }
 
     function splitSignature(bytes memory sig)
-        public
+        internal
         pure
         returns (
             bytes32 r,
@@ -633,7 +652,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         //todo restricts users from buying multiple plates
         MarketItem memory listing = idToMarketplaceItem[listingId];
         require(
-            getPlatesOfOwner(msg.sender).id != 0,
+            getPlatesOfOwner(msg.sender).id == 0,
             "You already have a plate, EAT ON THAT"
         );
         require(listing.active, "Listing is not active");
@@ -665,7 +684,7 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
     function getPlatesOfOwner(address _owner)
         public
         view
-        returns (EatPlate memory)
+        returns (EatPlateReturn memory)
     {
         uint256 plateId = 0;
         for (uint256 i = 1; i <= _tokenIds.current(); i++) {
@@ -674,11 +693,19 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
                 break;
             }
         }
-        if (plateId == 0) {
-            return EatPlate(0, 0, 0, 0, 0, 0, Category(0), 0, 0, new Spin[](0));
-        } else {
-            return idToEatPlate[plateId];
-        }
+        EatPlate storage plate = idToEatPlate[plateId];
+        EatPlateReturn memory returnPlate;
+        returnPlate.id = plate.id;
+        returnPlate.efficiency = plate.efficiency;
+        returnPlate.durablity = plate.durablity;
+        returnPlate.fortune = plate.fortune;
+        returnPlate.eats = plate.eats;
+        returnPlate.shiny = plate.shiny;
+        returnPlate.level = plate.level;
+        returnPlate.category = plate.category;
+        returnPlate.lastEat = plate.lastEat;
+
+        return returnPlate;
     }
 
     //view function to get restaurant details from address
@@ -699,9 +726,17 @@ contract EatMoney is ERC1155, ERC1155Burnable, Ownable, VRFConsumerBaseV2 {
         override
         returns (string memory)
     {
-        EatPlate memory plate = idToEatPlate[id];
+        EatPlate storage plate = idToEatPlate[id];
         if (plate.category == Category.BRONZE) {
-            if (plate.level == 1) {
+            if (plate.level == 0) {
+                return
+                    string(
+                        abi.encodePacked(
+                            "ipfs://",
+                            "bafkreicc7rmg5ihyvv2tmoyn3btntmwf6iu5jff4xo2feuev7fbohyz6bi"
+                        )
+                    );
+            } else if (plate.level == 1) {
                 return string(abi.encodePacked(super.uri(id), "bronze_1.json"));
             } else if (plate.level == 2) {
                 return string(abi.encodePacked(super.uri(id), "bronze_2.json"));
