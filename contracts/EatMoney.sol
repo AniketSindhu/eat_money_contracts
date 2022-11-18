@@ -324,7 +324,7 @@ contract EatMoney is
         require(id != 0, "Restaurant not registered");
         delete idToRestaurant[id];
         delete addressToRestaurantId[restaurantAddress];
-        safeTransferFrom(
+        _safeTransferFrom(
             address(this),
             restaurantAddress,
             0,
@@ -643,7 +643,7 @@ contract EatMoney is
             true,
             plateId
         );
-        _safeTransferFrom(msg.sender, address(this), plateId, 1, "");
+        safeTransferFrom(msg.sender, address(this), plateId, 1, "");
         //emit Listed(plateId, price);
     }
 
