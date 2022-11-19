@@ -140,7 +140,7 @@ contract EatMoney is
     mapping(address => uint256) public addressToRestaurantId;
 
     event EatFinished(
-        uint256 plateId,
+        uint256 indexed plateId,
         uint256 restaurantId,
         uint256 amount,
         uint256 eatCoinsMinted
@@ -154,7 +154,11 @@ contract EatMoney is
         uint256 level
     );
 
-    event SpinFinished(uint256 plateId, uint256 spinId, uint256 eatCoinsWon);
+    event SpinFinished(
+        uint256 indexed plateId,
+        uint256 indexed spinId,
+        uint256 eatCoinsWon
+    );
 
     constructor(
         uint64 subscriptionId,
@@ -371,7 +375,7 @@ contract EatMoney is
             "Invalid signature"
         );
         require(
-            plate.lastEat + 1 days < block.timestamp,
+            plate.lastEat + 1 days > block.timestamp,
             "You can eat only once a day"
         );
         uint256 price = uint256(getLatestPrice());
@@ -450,7 +454,7 @@ contract EatMoney is
             "Last eat spin already done"
         );
         require(
-            plate.lastEat + 5 minutes < block.timestamp,
+            plate.lastEat + 5 minutes > block.timestamp,
             "You can spin only after 5 minutes of last eat"
         );
         burn(msg.sender, plateId, 30**EAT_DECIMALS);
